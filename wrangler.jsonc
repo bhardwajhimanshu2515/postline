@@ -31,10 +31,10 @@
     // LinkedIn app's Client ID (public; it appears in every sign-in link).
     "LINKEDIN_CLIENT_ID": "86i349mdtfk53l",
     "LINKEDIN_VERSION": "202608",
-    "APP_NAME": "Postline",
+    "APP_NAME": "Postline By Sr Dev",
     // Shown publicly on the docs and privacy pages.
-    "OPERATOR_NAME": "YOUR NAME",
-    "SUPPORT_EMAIL": "support@YOUR-DOMAIN.com"
+    "OPERATOR_NAME": "Himanshu Bhardwaj",
+    "SUPPORT_EMAIL": "bhardwajhimanshu2515@gmail.com"
   }
 
   // Secrets (never put these in this file):
