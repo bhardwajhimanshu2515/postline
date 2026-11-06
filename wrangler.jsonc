@@ -15,19 +15,19 @@
   "d1_databases": [
     // Create it with: npx wrangler d1 create postline
     // then paste the database_id it prints here.
-    { "binding": "DB", "database_name": "postline", "database_id": "REPLACE_WITH_YOUR_D1_ID", "migrations_dir": "migrations" }
+    { "binding": "DB", "database_name": "postline", "database_id": "3af413fe-68fc-4fa4-a40e-d44d7a257856", "migrations_dir": "migrations" }
   ],
 
   "kv_namespaces": [
     // Create it with: npx wrangler kv namespace create OAUTH_KV
     // then paste the id it prints here.
-    { "binding": "OAUTH_KV", "id": "REPLACE_WITH_YOUR_KV_ID" }
+    { "binding": "OAUTH_KV", "id": "9b928035ad254f1a95d82789283929bd" }
   ],
 
   "vars": {
     // The exact URL people paste into Claude. Change it if you rename the
     // Worker or use a custom domain.
-    "MCP_RESOURCE": "https://postline.YOUR-SUBDOMAIN.workers.dev/mcp",
+    "MCP_RESOURCE": "https://postline.bhardwajhimanshu2515.workers.dev/mcp",
     "LINKEDIN_VERSION": "202608",
     "APP_NAME": "Postline",
     // Shown publicly on the docs and privacy pages.
