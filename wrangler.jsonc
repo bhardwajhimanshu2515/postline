@@ -28,6 +28,8 @@
     // The exact URL people paste into Claude. Change it if you rename the
     // Worker or use a custom domain.
     "MCP_RESOURCE": "https://postline.bhardwajhimanshu2515.workers.dev/mcp",
+    // LinkedIn app's Client ID (public; it appears in every sign-in link).
+    "LINKEDIN_CLIENT_ID": "86i349mdtfk53l",
     "LINKEDIN_VERSION": "202608",
     "APP_NAME": "Postline",
     // Shown publicly on the docs and privacy pages.
@@ -36,7 +38,6 @@
   }
 
   // Secrets (never put these in this file):
-  //   npx wrangler secret put LINKEDIN_CLIENT_ID
   //   npx wrangler secret put LINKEDIN_CLIENT_SECRET
   //   npx wrangler secret put SCHEDULE_ENCRYPTION_KEY   (32+ random characters)
 }
