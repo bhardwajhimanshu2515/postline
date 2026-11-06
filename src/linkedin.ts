@@ -28,7 +28,7 @@ export class LinkedInError extends Error {
 export function authorizeUrl(opts: { clientId: string; redirectUri: string; state: string }): string {
   const url = new URL(`${oauthBase()}/oauth/v2/authorization`);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", opts.clientId);
+  url.searchParams.set("client_id", opts.clientId.trim());
   url.searchParams.set("redirect_uri", opts.redirectUri);
   url.searchParams.set("state", opts.state);
   url.searchParams.set("scope", LINKEDIN_SCOPES);
@@ -55,8 +55,8 @@ export async function exchangeCode(opts: {
       grant_type: "authorization_code",
       code: opts.code,
       redirect_uri: opts.redirectUri,
-      client_id: opts.clientId,
-      client_secret: opts.clientSecret,
+      client_id: opts.clientId.trim(),
+      client_secret: opts.clientSecret.trim(), // pasted secrets often carry a stray space or newline
     }),
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
