@@ -71,10 +71,14 @@ const postFields = {
   link_url: httpsUrl.optional().describe("Share a link card for this https URL."),
   link_title: z.string().max(400).optional().describe("Title for the link card. Required with link_url."),
   link_description: z.string().max(4086).optional().describe("Short description shown on the link card."),
+  document_url: httpsUrl
+    .optional()
+    .describe("Public https link to a PDF (max 100 MB, up to 300 pages). Posts it as a swipeable carousel/document."),
+  document_title: z.string().max(400).optional().describe("Title shown on the carousel/document. Required with document_url."),
 };
 
 const FORMAT_NOTE =
-  "Write plain text: line breaks are kept, #hashtags become clickable, and characters like ( ) * _ are escaped automatically, so don't add Markdown or backslashes. @mentions show as plain text. Optionally attach ONE of: an image from a public https link (JPEG/PNG/GIF, max 8 MB), or a link card (link_url + link_title; an image_url then becomes its thumbnail).";
+  "Write plain text: line breaks are kept, #hashtags become clickable, and characters like ( ) * _ are escaped automatically, so don't add Markdown or backslashes. @mentions show as plain text. Optionally attach ONE of: an image from a public https link (JPEG/PNG/GIF, max 8 MB); a PDF carousel (document_url + document_title), which LinkedIn shows as swipeable slides; or a link card (link_url + link_title; an image_url then becomes its thumbnail).";
 
 function toRequest(args: {
   text: string;
@@ -84,6 +88,8 @@ function toRequest(args: {
   link_url?: string;
   link_title?: string;
   link_description?: string;
+  document_url?: string;
+  document_title?: string;
 }): PostRequest {
   return {
     text: args.text,
@@ -93,7 +99,19 @@ function toRequest(args: {
     link_url: args.link_url,
     link_title: args.link_title,
     link_description: args.link_description,
+    document_url: args.document_url,
+    document_title: args.document_title,
   };
+}
+
+/** Returns an error message if the attachments don't fit together. */
+function attachmentProblem(args: { image_url?: string; link_url?: string; link_title?: string; document_url?: string; document_title?: string }): string | null {
+  if (args.link_url && !args.link_title) return "A link card needs a title. Add link_title and try again.";
+  if (args.document_url && !args.document_title) return "A PDF carousel needs a title. Add document_title and try again.";
+  if (args.document_url && (args.image_url || args.link_url)) {
+    return "A post can have a PDF carousel or an image/link card, not both. Remove one and try again.";
+  }
+  return null;
 }
 
 function describeRow(r: ScheduledRow): string {
@@ -155,7 +173,8 @@ export function createServer(): McpServer {
     async (args) =>
       run(async () => {
         const s = session();
-        if (args.link_url && !args.link_title) return fail("A link card needs a title. Add link_title and try again.");
+        const problem = attachmentProblem(args);
+        if (problem) return fail(problem);
         const { urn, url } = await publish(s.linkedinToken, env.LINKEDIN_VERSION, s.sub, toRequest(args));
         return ok(
           [
@@ -196,7 +215,8 @@ export function createServer(): McpServer {
     async (args) =>
       run(async () => {
         const s = session();
-        if (args.link_url && !args.link_title) return fail("A link card needs a title. Add link_title and try again.");
+        const problem = attachmentProblem(args);
+        if (problem) return fail(problem);
         const runAt = parsePublishAt(args.publish_at);
         if (runAt === null) {
           return fail("publish_at must look like 2026-11-08T09:00:00+05:30 (date, time and UTC offset).");
@@ -222,6 +242,12 @@ export function createServer(): McpServer {
           await res?.body?.cancel();
           if (!res?.ok) return fail("Couldn't open the image link. Check it's public and try again.");
           if (!["image/jpeg", "image/png", "image/gif"].includes(type)) return fail("The image must be a JPEG, PNG or GIF.");
+        }
+        if (args.document_url) {
+          const res = await fetch(args.document_url).catch(() => null);
+          const okLink = !!res?.ok;
+          await res?.body?.cancel();
+          if (!okLink) return fail("Couldn't open the PDF link. Check it's public and try again.");
         }
         const row = await createScheduled(env, {
           memberSub: s.sub,

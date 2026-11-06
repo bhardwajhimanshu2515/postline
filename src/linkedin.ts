@@ -106,6 +106,8 @@ export interface PostInput {
   visibility: Visibility;
   imageUrn?: string;
   imageAltText?: string;
+  /** A PDF uploaded with uploadDocumentFromUrl: shows as a swipeable carousel. */
+  document?: { urn: string; title: string };
   article?: { url: string; title: string; description?: string };
 }
 
@@ -136,6 +138,8 @@ export async function createPost(token: string, version: string, input: PostInpu
         ...(input.imageUrn ? { thumbnail: input.imageUrn } : {}),
       },
     };
+  } else if (input.document) {
+    body.content = { media: { id: input.document.urn, title: input.document.title } };
   } else if (input.imageUrn) {
     body.content = {
       media: { id: input.imageUrn, ...(input.imageAltText ? { altText: input.imageAltText } : {}) },
@@ -221,6 +225,57 @@ async function waitUntilAvailable(token: string, version: string, imageUrn: stri
     if (status === "PROCESSING_FAILED") throw new LinkedInError("LinkedIn couldn't process the image.", 422, "rejected");
     await new Promise((r) => setTimeout(r, 750));
   }
+}
+
+// ---------------------------------------------------------------- documents (PDF carousels)
+
+const MAX_DOCUMENT_BYTES = 100 * 1024 * 1024;
+
+/** Downloads a PDF from a public https URL and uploads it to LinkedIn. Returns urn:li:document:… */
+export async function uploadDocumentFromUrl(
+  token: string,
+  version: string,
+  ownerUrn: string,
+  documentUrl: string,
+): Promise<string> {
+  const source = await fetch(documentUrl, { redirect: "follow" });
+  if (!source.ok) throw new LinkedInError(`Couldn't download the PDF (HTTP ${source.status}).`, 400, "rejected");
+  const declared = Number(source.headers.get("content-length") ?? 0);
+  if (declared > MAX_DOCUMENT_BYTES) throw new LinkedInError("The PDF is larger than 100 MB.", 400, "rejected");
+  const bytes = await source.arrayBuffer();
+  if (bytes.byteLength > MAX_DOCUMENT_BYTES) throw new LinkedInError("The PDF is larger than 100 MB.", 400, "rejected");
+  // Check the file itself, since many hosts send PDFs as application/octet-stream.
+  const head = new TextDecoder().decode(new Uint8Array(bytes.slice(0, 5)));
+  if (head !== "%PDF-") throw new LinkedInError("That link isn't a PDF file.", 400, "rejected");
+
+  const init = await fetch(`${apiBase()}/rest/documents?action=initializeUpload`, {
+    method: "POST",
+    headers: restHeaders(token, version),
+    body: JSON.stringify({ initializeUploadRequest: { owner: ownerUrn } }),
+  });
+  if (!init.ok) throw await toError(init, "LinkedIn didn't accept the PDF upload");
+  const { value } = (await init.json()) as { value?: { uploadUrl?: string; document?: string } };
+  if (!value?.uploadUrl || !value.document) throw new LinkedInError("LinkedIn didn't return an upload address.", 502);
+
+  const put = await fetch(value.uploadUrl, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/pdf" },
+    body: bytes,
+  });
+  if (!put.ok) throw await toError(put, "Uploading the PDF to LinkedIn failed");
+
+  // Documents take longer to process than images.
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const res = await fetch(`${apiBase()}/rest/documents/${encodeURIComponent(value.document)}`, {
+      headers: restHeaders(token, version),
+    });
+    if (!res.ok) break;
+    const { status } = (await res.json().catch(() => ({}))) as { status?: string };
+    if (status === "AVAILABLE") break;
+    if (status === "PROCESSING_FAILED") throw new LinkedInError("LinkedIn couldn't process the PDF.", 422, "rejected");
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return value.document;
 }
 
 // ---------------------------------------------------------------- errors

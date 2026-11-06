@@ -322,6 +322,25 @@ try {
     assert.equal(sent.visibility, "PUBLIC");
   });
 
+  await step("publish PDF carousel (document post)", async () => {
+    const r = await callTool("publish_linkedin_post", {
+      text: "My carousel",
+      document_url: "http://localhost:9999/deck.pdf",
+      document_title: "Same AI. Different results.",
+    });
+    assert.ok(!r.isError, textOf(r));
+    const put = log.find((e) => e.method === "PUT" && e.path === "/upload/doc");
+    assert.ok(put && put.body.startsWith("%PDF-"));
+    const sent = JSON.parse(log.filter((e) => e.path === "/rest/posts" && e.method === "POST").at(-1).body);
+    assert.deepEqual(sent.content, { media: { id: "urn:li:document:D5E1", title: "Same AI. Different results." } });
+    let bad = await callTool("publish_linkedin_post", { text: "x", document_url: "http://localhost:9999/deck.pdf" });
+    assert.match(textOf(bad), /needs a title/);
+    bad = await callTool("publish_linkedin_post", { text: "x", document_url: "http://localhost:9999/img.png", document_title: "t" });
+    assert.match(textOf(bad), /isn't a PDF/);
+    bad = await callTool("publish_linkedin_post", { text: "x", document_url: "http://localhost:9999/deck.pdf", document_title: "t", image_url: "http://localhost:9999/img.png" });
+    assert.match(textOf(bad), /not both/);
+  });
+
   await step("link card without title is refused", async () => {
     const r = await callTool("publish_linkedin_post", { text: "x", link_url: "https://example.com" });
     assert.equal(r.isError, true);

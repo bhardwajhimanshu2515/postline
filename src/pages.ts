@@ -96,7 +96,7 @@ export function docsPage(site: Site): string {
 <table>
 <tr><th>Tool</th><th>What it does</th></tr>
 <tr><td><code>get_linkedin_profile</code></td><td>Shows which LinkedIn account is connected. Read-only.</td></tr>
-<tr><td><code>publish_linkedin_post</code></td><td>Publishes a post as you: text up to 3,000 characters, with an optional image (JPEG, PNG or GIF from a public link) or a link card. Visible to everyone or only your connections.</td></tr>
+<tr><td><code>publish_linkedin_post</code></td><td>Publishes a post as you: text up to 3,000 characters, with an optional image (JPEG, PNG or GIF), a PDF carousel (swipeable slides) or a link card, each from a public link. Visible to everyone or only your connections.</td></tr>
 <tr><td><code>schedule_linkedin_post</code></td><td>Saves a post to publish automatically at a set date and time, up to 59 days ahead. It goes out within about a minute of that time, even if Claude is closed.</td></tr>
 <tr><td><code>list_scheduled_linkedin_posts</code></td><td>Shows upcoming scheduled posts, plus ones published, failed or cancelled in the last 7 days. Read-only.</td></tr>
 <tr><td><code>cancel_scheduled_linkedin_post</code></td><td>Cancels a scheduled post before it goes out.</td></tr>

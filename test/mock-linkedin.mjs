@@ -56,6 +56,20 @@ export function startMock(port = 9999) {
       res.writeHead(204);
       return res.end();
     }
+    if (req.method === "POST" && url.pathname === "/rest/documents" && url.searchParams.get("action") === "initializeUpload") {
+      return json(200, { value: { uploadUrl: `http://localhost:${port}/upload/doc`, document: "urn:li:document:D5E1" } });
+    }
+    if (req.method === "PUT" && url.pathname === "/upload/doc") {
+      res.writeHead(201);
+      return res.end();
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/rest/documents/")) {
+      return json(200, { status: "AVAILABLE" });
+    }
+    if (req.method === "GET" && url.pathname === "/deck.pdf") {
+      res.writeHead(200, { "content-type": "application/octet-stream" });
+      return res.end("%PDF-1.4\n% fake\n");
+    }
     if (req.method === "GET" && url.pathname === "/img.png") {
       res.writeHead(200, { "content-type": "image/png", "content-length": PNG.length });
       return res.end(PNG);
