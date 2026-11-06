@@ -1,0 +1,7 @@
+LINKEDIN_CLIENT_ID=test-client
+LINKEDIN_CLIENT_SECRET=test-secret
+MCP_RESOURCE=http://localhost:8787/mcp
+LINKEDIN_OAUTH_BASE=http://localhost:9999
+LINKEDIN_API_BASE=http://localhost:9999
+SCHEDULE_ENCRYPTION_KEY=test-key-test-key-test-key-test-key-1234
+SCHEDULE_MIN_LEAD_SECONDS=0

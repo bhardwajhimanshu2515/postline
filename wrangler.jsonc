@@ -1,0 +1,42 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "postline",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-11",
+  // nodejs_compat: needed by the MCP handler (AsyncLocalStorage).
+  // global_fetch_strictly_public: outbound fetches (image downloads, client
+  // metadata documents) can only reach the public internet.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "observability": { "enabled": true },
+
+  // Every minute: publish scheduled posts that are due.
+  "triggers": { "crons": ["* * * * *"] },
+
+  "d1_databases": [
+    // Create it with: npx wrangler d1 create postline
+    // then paste the database_id it prints here.
+    { "binding": "DB", "database_name": "postline", "database_id": "REPLACE_WITH_YOUR_D1_ID", "migrations_dir": "migrations" }
+  ],
+
+  "kv_namespaces": [
+    // Create it with: npx wrangler kv namespace create OAUTH_KV
+    // then paste the id it prints here.
+    { "binding": "OAUTH_KV", "id": "REPLACE_WITH_YOUR_KV_ID" }
+  ],
+
+  "vars": {
+    // The exact URL people paste into Claude. Change it if you rename the
+    // Worker or use a custom domain.
+    "MCP_RESOURCE": "https://postline.YOUR-SUBDOMAIN.workers.dev/mcp",
+    "LINKEDIN_VERSION": "202608",
+    "APP_NAME": "Postline",
+    // Shown publicly on the docs and privacy pages.
+    "OPERATOR_NAME": "YOUR NAME",
+    "SUPPORT_EMAIL": "support@YOUR-DOMAIN.com"
+  }
+
+  // Secrets (never put these in this file):
+  //   npx wrangler secret put LINKEDIN_CLIENT_ID
+  //   npx wrangler secret put LINKEDIN_CLIENT_SECRET
+  //   npx wrangler secret put SCHEDULE_ENCRYPTION_KEY   (32+ random characters)
+}
