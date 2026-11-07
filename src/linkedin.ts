@@ -99,6 +99,7 @@ export async function getMember(token: string): Promise<LinkedInMember> {
 // ---------------------------------------------------------------- posts
 
 export type Visibility = "PUBLIC" | "CONNECTIONS";
+export type PollDuration = "ONE_DAY" | "THREE_DAYS" | "SEVEN_DAYS" | "FOURTEEN_DAYS";
 
 export interface PostInput {
   authorUrn: string;
@@ -108,6 +109,13 @@ export interface PostInput {
   imageAltText?: string;
   /** A PDF uploaded with uploadDocumentFromUrl: shows as a swipeable carousel. */
   document?: { urn: string; title: string };
+  /** A video uploaded with uploadVideoFromUrl. */
+  video?: { urn: string; title?: string };
+  /** 2–20 images uploaded with uploadImageFromUrl. */
+  multiImage?: { urn: string; altText?: string }[];
+  poll?: { question: string; options: string[]; duration: PollDuration };
+  /** Reshare this post (urn:li:share:… / urn:li:ugcPost:…) with the commentary on top. */
+  reshareOf?: string;
   article?: { url: string; title: string; description?: string };
 }
 
@@ -129,6 +137,7 @@ export async function createPost(token: string, version: string, input: PostInpu
     lifecycleState: "PUBLISHED",
     isReshareDisabledByAuthor: false,
   };
+  if (input.reshareOf) body.reshareContext = { parent: input.reshareOf };
   if (input.article) {
     body.content = {
       article: {
@@ -140,6 +149,20 @@ export async function createPost(token: string, version: string, input: PostInpu
     };
   } else if (input.document) {
     body.content = { media: { id: input.document.urn, title: input.document.title } };
+  } else if (input.video) {
+    body.content = { media: { id: input.video.urn, ...(input.video.title ? { title: input.video.title } : {}) } };
+  } else if (input.multiImage) {
+    body.content = {
+      multiImage: { images: input.multiImage.map((i) => ({ id: i.urn, ...(i.altText ? { altText: i.altText } : {}) })) },
+    };
+  } else if (input.poll) {
+    body.content = {
+      poll: {
+        question: input.poll.question,
+        options: input.poll.options.map((text) => ({ text })),
+        settings: { duration: input.poll.duration },
+      },
+    };
   } else if (input.imageUrn) {
     body.content = {
       media: { id: input.imageUrn, ...(input.imageAltText ? { altText: input.imageAltText } : {}) },
@@ -164,6 +187,17 @@ export async function deletePost(token: string, version: string, postUrn: string
   });
   if (res.status === 404) throw new LinkedInError("That post doesn't exist or was already deleted.", 404, "rejected");
   if (!res.ok) throw await toError(res, "LinkedIn didn't delete the post");
+}
+
+/** Replaces a published post's text. LinkedIn doesn't allow changing its image, video or poll. */
+export async function updatePostText(token: string, version: string, postUrn: string, commentary: string): Promise<void> {
+  const res = await fetch(`${apiBase()}/rest/posts/${encodeURIComponent(postUrn)}`, {
+    method: "POST",
+    headers: { ...restHeaders(token, version), "X-RestLi-Method": "PARTIAL_UPDATE" },
+    body: JSON.stringify({ patch: { $set: { commentary } } }),
+  });
+  if (res.status === 404) throw new LinkedInError("That post doesn't exist or was deleted.", 404, "rejected");
+  if (!res.ok) throw await toError(res, "LinkedIn didn't update the post");
 }
 
 export function postUrl(urn: string): string {
@@ -276,6 +310,75 @@ export async function uploadDocumentFromUrl(
     await new Promise((r) => setTimeout(r, 1000));
   }
   return value.document;
+}
+
+// ---------------------------------------------------------------- videos
+
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024; // Workers memory is 128 MB; LinkedIn allows up to 200 MB
+
+/** Downloads an MP4 from a public https URL and uploads it to LinkedIn in parts. Returns urn:li:video:… */
+export async function uploadVideoFromUrl(
+  token: string,
+  version: string,
+  ownerUrn: string,
+  videoUrl: string,
+): Promise<string> {
+  const source = await fetch(videoUrl, { redirect: "follow" });
+  if (!source.ok) throw new LinkedInError(`Couldn't download the video (HTTP ${source.status}).`, 400, "rejected");
+  const declared = Number(source.headers.get("content-length") ?? 0);
+  if (declared > MAX_VIDEO_BYTES) throw new LinkedInError("The video is larger than 100 MB.", 400, "rejected");
+  const bytes = await source.arrayBuffer();
+  if (bytes.byteLength > MAX_VIDEO_BYTES) throw new LinkedInError("The video is larger than 100 MB.", 400, "rejected");
+  if (bytes.byteLength < 75 * 1024) throw new LinkedInError("The video is too small (LinkedIn needs at least 75 KB).", 400, "rejected");
+  // MP4 files carry "ftyp" at byte 4.
+  const brand = new TextDecoder().decode(new Uint8Array(bytes.slice(4, 8)));
+  if (brand !== "ftyp") throw new LinkedInError("The video must be an MP4 file.", 400, "rejected");
+
+  const init = await fetch(`${apiBase()}/rest/videos?action=initializeUpload`, {
+    method: "POST",
+    headers: restHeaders(token, version),
+    body: JSON.stringify({
+      initializeUploadRequest: { owner: ownerUrn, fileSizeBytes: bytes.byteLength, uploadCaptions: false, uploadThumbnail: false },
+    }),
+  });
+  if (!init.ok) throw await toError(init, "LinkedIn didn't accept the video upload");
+  const { value } = (await init.json()) as {
+    value?: { video?: string; uploadToken?: string; uploadInstructions?: { uploadUrl: string; firstByte: number; lastByte: number }[] };
+  };
+  if (!value?.video || !value.uploadInstructions?.length) {
+    throw new LinkedInError("LinkedIn didn't return upload instructions for the video.", 502);
+  }
+
+  const etags: string[] = [];
+  for (const part of value.uploadInstructions) {
+    const put = await fetch(part.uploadUrl, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+      body: bytes.slice(part.firstByte, part.lastByte + 1),
+    });
+    if (!put.ok) throw await toError(put, "Uploading the video to LinkedIn failed");
+    const etag = put.headers.get("etag");
+    if (!etag) throw new LinkedInError("LinkedIn didn't confirm a video part.", 502);
+    etags.push(etag.replace(/"/g, ""));
+  }
+
+  const fin = await fetch(`${apiBase()}/rest/videos?action=finalizeUpload`, {
+    method: "POST",
+    headers: restHeaders(token, version),
+    body: JSON.stringify({ finalizeUploadRequest: { video: value.video, uploadToken: value.uploadToken ?? "", uploadedPartIds: etags } }),
+  });
+  if (!fin.ok) throw await toError(fin, "LinkedIn didn't finish the video upload");
+
+  // Give LinkedIn time to process before posting.
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const res = await fetch(`${apiBase()}/rest/videos/${encodeURIComponent(value.video)}`, { headers: restHeaders(token, version) });
+    if (!res.ok) break;
+    const { status } = (await res.json().catch(() => ({}))) as { status?: string };
+    if (status === "AVAILABLE") break;
+    if (status === "PROCESSING_FAILED") throw new LinkedInError("LinkedIn couldn't process the video.", 422, "rejected");
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return value.video;
 }
 
 // ---------------------------------------------------------------- errors

@@ -338,7 +338,86 @@ try {
     bad = await callTool("publish_linkedin_post", { text: "x", document_url: "http://localhost:9999/img.png", document_title: "t" });
     assert.match(textOf(bad), /isn't a PDF/);
     bad = await callTool("publish_linkedin_post", { text: "x", document_url: "http://localhost:9999/deck.pdf", document_title: "t", image_url: "http://localhost:9999/img.png" });
-    assert.match(textOf(bad), /not both/);
+    assert.match(textOf(bad), /only one of/);
+  });
+
+  const lastPost = () => JSON.parse(log.filter((e) => e.path === "/rest/posts" && e.method === "POST").at(-1).body);
+
+  await step("publish video (multipart upload + finalize)", async () => {
+    const r = await callTool("publish_linkedin_post", { text: "Video!", video_url: "http://localhost:9999/clip.mp4", video_title: "Demo" });
+    assert.ok(!r.isError, textOf(r));
+    const parts = log.filter((e) => e.method === "PUT" && e.path.startsWith("/upload/v/"));
+    assert.equal(parts.length, 2);
+    assert.equal(parts[0].body.length + parts[1].body.length, 100 * 1024);
+    const fin = JSON.parse(log.find((e) => e.query.includes("finalizeUpload")).body);
+    assert.deepEqual(fin.finalizeUploadRequest.uploadedPartIds, [`etag-1-${51200}`, `etag-2-${51200}`]);
+    assert.deepEqual(lastPost().content, { media: { id: "urn:li:video:V1", title: "Demo" } });
+    const bad = await callTool("publish_linkedin_post", { text: "x", video_url: "http://localhost:9999/img.png" });
+    assert.equal(bad.isError, true);
+  });
+
+  await step("publish multi-image post", async () => {
+    const r = await callTool("publish_linkedin_post", {
+      text: "Gallery",
+      image_urls: ["http://localhost:9999/img.png", "http://localhost:9999/img.png", "http://localhost:9999/img.png"],
+      image_alt_texts: ["one", "two"],
+    });
+    assert.ok(!r.isError, textOf(r));
+    assert.deepEqual(lastPost().content, {
+      multiImage: { images: [{ id: "urn:li:image:C4E1", altText: "one" }, { id: "urn:li:image:C4E1", altText: "two" }, { id: "urn:li:image:C4E1" }] },
+    });
+  });
+
+  await step("publish poll", async () => {
+    const r = await callTool("publish_linkedin_post", {
+      text: "Quick poll",
+      poll_question: "Best AI tool for writing?",
+      poll_options: ["Claude", "Something else"],
+      poll_duration: "THREE_DAYS",
+    });
+    assert.ok(!r.isError, textOf(r));
+    assert.deepEqual(lastPost().content, {
+      poll: { question: "Best AI tool for writing?", options: [{ text: "Claude" }, { text: "Something else" }], settings: { duration: "THREE_DAYS" } },
+    });
+    const bad = await callTool("publish_linkedin_post", { text: "x", poll_options: ["a", "b"] });
+    assert.match(textOf(bad), /needs a question/);
+  });
+
+  await step("reshare a post from its link", async () => {
+    const r = await callTool("publish_linkedin_post", {
+      text: "Worth reading",
+      reshare_of: "https://www.linkedin.com/feed/update/urn:li:share:7111111111111111111/",
+    });
+    assert.ok(!r.isError, textOf(r));
+    assert.deepEqual(lastPost().reshareContext, { parent: "urn:li:share:7111111111111111111" });
+    const r2 = await callTool("publish_linkedin_post", {
+      text: "Also good",
+      reshare_of: "https://www.linkedin.com/posts/someone_ai-tools-activity-7222222222222222222-AbCd",
+    });
+    assert.ok(!r2.isError, textOf(r2));
+    assert.deepEqual(lastPost().reshareContext, { parent: "urn:li:activity:7222222222222222222" });
+  });
+
+  await step("mixing two attachment types is refused", async () => {
+    const r = await callTool("publish_linkedin_post", {
+      text: "x",
+      video_url: "http://localhost:9999/clip.mp4",
+      poll_question: "q?",
+      poll_options: ["a", "b"],
+    });
+    assert.equal(r.isError, true);
+    assert.match(textOf(r), /only one of/);
+  });
+
+  await step("edit a post's text (partial update, escaped)", async () => {
+    const r = await callTool("edit_linkedin_post", {
+      post_id: "https://www.linkedin.com/feed/update/urn:li:share:700001/",
+      text: "Fixed typo (v2) #update",
+    });
+    assert.ok(!r.isError, textOf(r));
+    const upd = log.filter((e) => e.headers["x-restli-method"] === "PARTIAL_UPDATE").at(-1);
+    assert.equal(upd.path, "/rest/posts/urn%3Ali%3Ashare%3A700001");
+    assert.deepEqual(JSON.parse(upd.body), { patch: { $set: { commentary: "Fixed typo \\(v2\\) {hashtag|\\#|update}" } } });
   });
 
   await step("link card without title is refused", async () => {
@@ -462,11 +541,12 @@ try {
     assert.match(textOf(r), /already published[\s\S]*delete_linkedin_post/);
   });
 
-  await step("tools/list has all 6 tools", async () => {
+  await step("tools/list has all 7 tools", async () => {
     const list = await mcp("tools/list");
     assert.deepEqual(list.body.result.tools.map((t) => t.name).sort(), [
       "cancel_scheduled_linkedin_post",
       "delete_linkedin_post",
+      "edit_linkedin_post",
       "get_linkedin_profile",
       "list_scheduled_linkedin_posts",
       "publish_linkedin_post",

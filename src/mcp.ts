@@ -3,8 +3,9 @@ import { getMcpAuthContext } from "agents/mcp/server";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import type { GrantProps } from "./env";
-import { LinkedInError, deletePost, getMember, postUrl, type Visibility } from "./linkedin";
-import { type PostRequest, publish } from "./publish";
+import { LinkedInError, deletePost, getMember, postUrl, updatePostText, type PollDuration, type Visibility } from "./linkedin";
+import { type PostRequest, attachmentProblem, publish } from "./publish";
+import { toCommentary } from "./littletext";
 import {
   MAX_SCHEDULE_DAYS,
   type ScheduledRow,
@@ -56,6 +57,20 @@ const httpsUrl = z
     "Must be an https:// link",
   );
 
+/** Accepts a post id or a LinkedIn post link and returns urn:li:share|ugcPost|activity:… */
+function parsePostRef(value: string): string | null {
+  const v = decodeURIComponent(value.trim());
+  const urn = v.match(/urn:li:(share|ugcPost|activity):\d+/);
+  if (urn) return urn[0];
+  const act = v.match(/activity-(\d{10,})/); // linkedin.com/posts/name_slug-activity-123…
+  if (act) return `urn:li:activity:${act[1]}`;
+  return null;
+}
+const postRef = z
+  .string()
+  .min(5)
+  .describe("The post id (urn:li:share:… / urn:li:ugcPost:…) or the post's LinkedIn link.");
+
 const postFields = {
   text: z
     .string()
@@ -75,44 +90,63 @@ const postFields = {
     .optional()
     .describe("Public https link to a PDF (max 100 MB, up to 300 pages). Posts it as a swipeable carousel/document."),
   document_title: z.string().max(400).optional().describe("Title shown on the carousel/document. Required with document_url."),
+  image_urls: z
+    .array(httpsUrl)
+    .min(2)
+    .max(20)
+    .optional()
+    .describe("2 to 20 public https image links (JPEG/PNG/GIF) for a multi-image post."),
+  image_alt_texts: z.array(z.string().max(4086)).max(20).optional().describe("Alt text for each of image_urls, in the same order."),
+  video_url: httpsUrl.optional().describe("Public https link to an MP4 video (75 KB to 100 MB, 3 s to 30 min)."),
+  video_title: z.string().max(400).optional().describe("Optional title for the video."),
+  poll_question: z.string().max(140).optional().describe("Poll question, up to 140 characters. Polls can't be edited after posting."),
+  poll_options: z.array(z.string().min(1).max(30)).min(2).max(4).optional().describe("2 to 4 poll options, up to 30 characters each."),
+  poll_duration: z
+    .enum(["ONE_DAY", "THREE_DAYS", "SEVEN_DAYS", "FOURTEEN_DAYS"])
+    .optional()
+    .describe("How long the poll stays open. Default SEVEN_DAYS."),
+  reshare_of: postRef.optional().describe("Reshare this post (its id or link) with your text on top."),
 };
 
 const FORMAT_NOTE =
-  "Write plain text: line breaks are kept, #hashtags become clickable, and characters like ( ) * _ are escaped automatically, so don't add Markdown or backslashes. @mentions show as plain text. Optionally attach ONE of: an image from a public https link (JPEG/PNG/GIF, max 8 MB); a PDF carousel (document_url + document_title), which LinkedIn shows as swipeable slides; or a link card (link_url + link_title; an image_url then becomes its thumbnail).";
+  "Write plain text: line breaks are kept, #hashtags become clickable, and characters like ( ) * _ are escaped automatically, so don't add Markdown or backslashes. @mentions show as plain text. Optionally add ONE of: an image (image_url, JPEG/PNG/GIF, max 8 MB); several images (image_urls, 2–20); a video (video_url, MP4 up to 100 MB); a PDF carousel (document_url + document_title), shown as swipeable slides; a poll (poll_question + 2–4 poll_options + poll_duration); a reshare of another post (reshare_of); or a link card (link_url + link_title; an image_url then becomes its thumbnail). Media must be at public https links.";
 
-function toRequest(args: {
-  text: string;
+type PostArgs = Omit<PostRequest, "visibility" | "poll_duration" | "reshare_of"> & {
   visibility: string;
-  image_url?: string;
-  image_alt_text?: string;
-  link_url?: string;
-  link_title?: string;
-  link_description?: string;
-  document_url?: string;
-  document_title?: string;
-}): PostRequest {
-  return {
+  poll_duration?: string;
+  reshare_of?: string;
+};
+
+/** Builds the request, or returns an error message. */
+function toRequest(args: PostArgs): PostRequest | string {
+  let reshare: string | undefined;
+  if (args.reshare_of) {
+    const ref = parsePostRef(args.reshare_of);
+    if (!ref) return "reshare_of must be a LinkedIn post link or id (urn:li:share:… / urn:li:ugcPost:…).";
+    reshare = ref;
+  }
+  const req: PostRequest = {
     text: args.text,
     visibility: args.visibility as Visibility,
     image_url: args.image_url,
     image_alt_text: args.image_alt_text,
+    image_urls: args.image_urls,
+    image_alt_texts: args.image_alt_texts,
     link_url: args.link_url,
     link_title: args.link_title,
     link_description: args.link_description,
     document_url: args.document_url,
     document_title: args.document_title,
+    video_url: args.video_url,
+    video_title: args.video_title,
+    poll_question: args.poll_question,
+    poll_options: args.poll_options,
+    poll_duration: args.poll_duration as PollDuration | undefined,
+    reshare_of: reshare,
   };
+  return attachmentProblem(req) ?? req;
 }
 
-/** Returns an error message if the attachments don't fit together. */
-function attachmentProblem(args: { image_url?: string; link_url?: string; link_title?: string; document_url?: string; document_title?: string }): string | null {
-  if (args.link_url && !args.link_title) return "A link card needs a title. Add link_title and try again.";
-  if (args.document_url && !args.document_title) return "A PDF carousel needs a title. Add document_title and try again.";
-  if (args.document_url && (args.image_url || args.link_url)) {
-    return "A post can have a PDF carousel or an image/link card, not both. Remove one and try again.";
-  }
-  return null;
-}
 
 function describeRow(r: ScheduledRow): string {
   const when = formatLike(r.run_at, r.publish_at);
@@ -123,7 +157,7 @@ function describeRow(r: ScheduledRow): string {
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: env.APP_NAME || "Postline", version: "1.1.0" });
+  const server = new McpServer({ name: env.APP_NAME || "Postline", version: "1.2.0" });
 
   // ------------------------------------------------------------ profile
   server.registerTool(
@@ -173,9 +207,9 @@ export function createServer(): McpServer {
     async (args) =>
       run(async () => {
         const s = session();
-        const problem = attachmentProblem(args);
-        if (problem) return fail(problem);
-        const { urn, url } = await publish(s.linkedinToken, env.LINKEDIN_VERSION, s.sub, toRequest(args));
+        const req = toRequest(args);
+        if (typeof req === "string") return fail(req);
+        const { urn, url } = await publish(s.linkedinToken, env.LINKEDIN_VERSION, s.sub, req);
         return ok(
           [
             `Posted to LinkedIn as ${s.name} (${args.visibility === "CONNECTIONS" ? "connections only" : "public"}).`,
@@ -215,8 +249,8 @@ export function createServer(): McpServer {
     async (args) =>
       run(async () => {
         const s = session();
-        const problem = attachmentProblem(args);
-        if (problem) return fail(problem);
+        const req = toRequest(args);
+        if (typeof req === "string") return fail(req);
         const runAt = parsePublishAt(args.publish_at);
         if (runAt === null) {
           return fail("publish_at must look like 2026-11-08T09:00:00+05:30 (date, time and UTC offset).");
@@ -243,11 +277,16 @@ export function createServer(): McpServer {
           if (!res?.ok) return fail("Couldn't open the image link. Check it's public and try again.");
           if (!["image/jpeg", "image/png", "image/gif"].includes(type)) return fail("The image must be a JPEG, PNG or GIF.");
         }
-        if (args.document_url) {
-          const res = await fetch(args.document_url).catch(() => null);
+        for (const [label, link] of [
+          ["PDF", args.document_url],
+          ["video", args.video_url],
+          ...(args.image_urls ?? []).map((u) => ["image", u] as const),
+        ] as const) {
+          if (!link) continue;
+          const res = await fetch(link).catch(() => null);
           const okLink = !!res?.ok;
           await res?.body?.cancel();
-          if (!okLink) return fail("Couldn't open the PDF link. Check it's public and try again.");
+          if (!okLink) return fail(`Couldn't open the ${label} link ${link}. Check it's public and try again.`);
         }
         const row = await createScheduled(env, {
           memberSub: s.sub,
@@ -255,7 +294,7 @@ export function createServer(): McpServer {
           publishAt: args.publish_at,
           token: s.linkedinToken,
           tokenExpiresAt: s.linkedinTokenExpiresAt,
-          post: toRequest(args),
+          post: req,
         });
         return ok(
           [
@@ -328,12 +367,7 @@ export function createServer(): McpServer {
       title: "Delete LinkedIn post",
       description:
         "Permanently deletes a published LinkedIn post by its post id (urn:li:share:… or urn:li:ugcPost:…), such as the id publish_linkedin_post returned or the link list_scheduled_linkedin_posts shows. Only posts by the connected account can be deleted. Confirm with the user first; this can't be undone.",
-      inputSchema: z.object({
-        post_id: z
-          .string()
-          .regex(/^urn:li:(share|ugcPost):[A-Za-z0-9_-]+$/, "Must look like urn:li:share:123 or urn:li:ugcPost:123")
-          .describe("The post id, e.g. urn:li:share:7262000000000000000"),
-      }),
+      inputSchema: z.object({ post_id: postRef }),
       annotations: {
         title: "Delete LinkedIn post",
         readOnlyHint: false,
@@ -345,8 +379,39 @@ export function createServer(): McpServer {
     async ({ post_id }) =>
       run(async () => {
         const s = session();
-        await deletePost(s.linkedinToken, env.LINKEDIN_VERSION, post_id);
-        return ok(`Deleted ${post_id} from ${s.name}'s LinkedIn profile.`);
+        const urn = parsePostRef(post_id);
+        if (!urn) return fail("That doesn't look like a LinkedIn post link or id.");
+        await deletePost(s.linkedinToken, env.LINKEDIN_VERSION, urn);
+        return ok(`Deleted ${urn} from ${s.name}'s LinkedIn profile.`);
+      }),
+  );
+
+  // ------------------------------------------------------------ edit
+  server.registerTool(
+    "edit_linkedin_post",
+    {
+      title: "Edit LinkedIn post text",
+      description:
+        "Replaces the text of a post the connected account published (by its id or link). Only the text can change: LinkedIn doesn't allow editing a post's image, video, carousel or poll. Show the user the new text and get their go-ahead first. Same formatting rules as publish_linkedin_post.",
+      inputSchema: z.object({
+        post_id: postRef,
+        text: z.string().min(1).max(MAX_POST_CHARS).describe("The complete new post text, as approved by the user."),
+      }),
+      annotations: {
+        title: "Edit LinkedIn post text",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ post_id, text }) =>
+      run(async () => {
+        const s = session();
+        const urn = parsePostRef(post_id);
+        if (!urn) return fail("That doesn't look like a LinkedIn post link or id.");
+        await updatePostText(s.linkedinToken, env.LINKEDIN_VERSION, urn, toCommentary(text));
+        return ok(`Updated the text of ${urn}.\nView it: ${postUrl(urn)}`);
       }),
   );
 

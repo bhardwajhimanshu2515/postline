@@ -66,6 +66,41 @@ export function startMock(port = 9999) {
     if (req.method === "GET" && url.pathname.startsWith("/rest/documents/")) {
       return json(200, { status: "AVAILABLE" });
     }
+    if (req.method === "POST" && url.pathname === "/rest/videos" && url.searchParams.get("action") === "initializeUpload") {
+      const size = JSON.parse(raw.toString()).initializeUploadRequest.fileSizeBytes;
+      const half = Math.floor(size / 2);
+      return json(200, {
+        value: {
+          video: "urn:li:video:V1",
+          uploadToken: "tok",
+          uploadInstructions: [
+            { uploadUrl: `http://localhost:${port}/upload/v/1`, firstByte: 0, lastByte: half - 1 },
+            { uploadUrl: `http://localhost:${port}/upload/v/2`, firstByte: half, lastByte: size - 1 },
+          ],
+        },
+      });
+    }
+    if (req.method === "PUT" && url.pathname.startsWith("/upload/v/")) {
+      res.writeHead(200, { etag: `"etag-${url.pathname.slice(-1)}-${raw.length}"` });
+      return res.end();
+    }
+    if (req.method === "POST" && url.pathname === "/rest/videos" && url.searchParams.get("action") === "finalizeUpload") {
+      res.writeHead(200);
+      return res.end();
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/rest/videos/")) {
+      return json(200, { status: "AVAILABLE" });
+    }
+    if (req.method === "GET" && url.pathname === "/clip.mp4") {
+      const buf = Buffer.alloc(100 * 1024);
+      buf.write("ftypisom", 4);
+      res.writeHead(200, { "content-type": "video/mp4", "content-length": buf.length });
+      return res.end(buf);
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/rest/posts/") && req.headers["x-restli-method"] === "PARTIAL_UPDATE") {
+      res.writeHead(204);
+      return res.end();
+    }
     if (req.method === "GET" && url.pathname === "/deck.pdf") {
       res.writeHead(200, { "content-type": "application/octet-stream" });
       return res.end("%PDF-1.4\n% fake\n");

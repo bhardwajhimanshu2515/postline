@@ -5,7 +5,8 @@ It runs on Cloudflare Workers (the free plan is enough). Scheduled posts are pub
 
 - **Tools:**
   - `get_linkedin_profile` (read-only)
-  - `publish_linkedin_post`: text, plus an optional image or link card, visible to everyone or to connections only
+  - `publish_linkedin_post`: text, plus one optional extra: image, 2–20 images, MP4 video, PDF carousel, poll, reshare of another post, or link card. Visible to everyone or to connections only
+  - `edit_linkedin_post` (destructive): replace a published post's text
   - `schedule_linkedin_post`: the same options plus `publish_at` (ISO 8601 with UTC offset), up to 59 days ahead
   - `list_scheduled_linkedin_posts` (read-only): upcoming posts, plus ones published, failed or cancelled in the last 7 days
   - `cancel_scheduled_linkedin_post` (destructive)
@@ -125,7 +126,7 @@ After you submit, Anthropic scans it automatically, and by default it's listed a
 
 ```bash
 npm run typecheck
-npm test     # starts the Worker locally against a fake LinkedIn and runs 29 end-to-end checks, including scheduling
+npm test     # starts the Worker locally against a fake LinkedIn and runs 36 end-to-end checks, including scheduling and every post type
 ```
 
 `LINKEDIN_OAUTH_BASE` and `LINKEDIN_API_BASE` exist only for tests (see `.dev.vars.test`). Never set them in production.
@@ -135,7 +136,7 @@ npm test     # starts the Worker locally against a fake LinkedIn and runs 29 end
 ```
 src/index.ts      OAuth provider + MCP endpoint wiring, token lifetimes
 src/auth.ts       consent page, LinkedIn redirect + callback, docs/privacy routes
-src/mcp.ts        the six tools
+src/mcp.ts        the seven tools
 src/publish.ts    shared "publish one post" logic
 src/schedule.ts   scheduled-post storage (D1, encrypted) and the cron publisher
 migrations/       D1 table for scheduled posts
